@@ -1,0 +1,207 @@
+---
+title: "assignment5_BurialMoundHealth"
+author: "Aske Svane Qvist"
+date: "03/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Task 1: Burial mound health
+
+__Question of interest__
+We were interested in the relation between the slope and whether burial mounds have been constructed. We were also interested in the frequency of mounds at different elevations.
+
+Additionally, we wanted to examine potential different patterns between robbed and non-robbed burial mounds. Are mounds at higher elevation or with steeper slopes more or less likely to be robbed?
+
+## Import relevant packages
+```{r}
+# using p_load from pacman to get all packages
+library(pacman)
+pacman::p_load(tidyverse, raster, sf, rgl, rgdal, rasterVis, lattice, rglwidget)
+
+
+```
+
+## Import data
+```{r}
+
+# Read in the csv file with info on each mound
+KAZ_mdata <- read_csv("data/KAZ_mdata.csv")
+
+# read in the mounds shapefile
+mound <- st_read("data/KAZ_mounds.shp") 
+head(mound)
+class(mound)
+
+# read in the aster raster elevation file
+aster <- raster("data/Aster.tif") 
+
+```
+
+## Pre-process the data
+```{r}
+# Reclassify
+rclmat <- cbind(-10000,-1, NA)
+aster <- reclassify(aster, rcl = rclmat)
+plot(aster)
+class(aster)
+
+# check if crs is the same 
+st_crs(mound) == st_crs(aster)
+
+# Check unit. It is in meters
+st_crs(mound)
+
+# Join neighborhoods and counts by shared columns: MoundID and TRAP_Code
+moundData <- left_join(KAZ_mdata, # the geometric shapefile
+                       mound, # the csv file with additional information
+                       by = c("MoundID" = "TRAP_Code")) # the columns they should join by
+
+# Quick check
+head(moundData)
+class(moundData)
+
+
+# When joining the data, it turned into a df object and not an sf object. We transform it to be sf:
+moundData <- st_as_sf(moundData)
+class(moundData) # now it is an sf object
+
+# Plot the geometry - points of the mounts to check
+plot(st_geometry(moundData)) # Looks desireable
+
+# Change into a spatial object. Currently, the `raster` package does not support `sf` objects so they will need to be converted to `Spatial` objects.
+moundData_sp <- as(moundData, "Spatial")
+
+# Quick check
+class(moundData_sp)
+
+# Crop aster with moundData_sp. With crop the raster extent is cropped to match the area with mounds.
+aster_crop <- crop(aster, moundData_sp)
+
+# Plot the original and the cropped version to compare
+plot(aster_crop)
+plot(aster)
+
+```
+
+## Plot the mounds on the raster showing slope.
+Color by whether they have been robbed or not
+```{r}
+
+# extract slope values from the raster
+aster_slope <- terrain(aster_crop, opt = 'slope', unit = 'degrees') 
+
+# Plot the slope raster
+plot(aster_slope)
+class(aster_slope)
+
+# changing the robbed columnn into factor
+moundData_sp$Robbed <- factor(moundData_sp$Robbed) 
+
+#plotting 
+rasterVis::levelplot(aster_slope,
+  margin = list(x = F, 
+                y = T),
+  col.regions = terrain.colors(16),
+  xlab = list (label = "", 
+               vjust = -.25),
+  sub = list(
+    label = "Slope in degrees",
+    font = 1,
+    cex = .9,
+    hjust = 1.5),
+  
+  key = list( 
+    points = list(
+      pch = 1,
+      col = c("blue","red")), 
+    text = list(
+      c("Not robbed","Robbed")))
+  ) + 
+  
+  spplot(moundData_sp, # add a layer of points
+         zcol = "Robbed", 
+         cex = .6,
+         pch = 1,
+         col.regions = c("blue","red")
+         )
+
+
+
+```
+Generally, the mounds have been located in areas with little or no slope. In the upper left and upper right corners with relatively greater slopes, there are no mounds. However, the mounds are nicely following the 'borders' to the areas with less plane terrain. The steeper slopes near the mounds could have provided a natural protection of the mounds against various weather conditions.
+
+From this exploratory plot, there does not seem to be a pattern in relation to what burial mounds that have been robbed.
+
+
+## Histograms 
+
+### Plot histogram to get an overview of the general conditions of the mounds
+```{r}
+# Get an overview of the conditions.
+ggplot(moundData, aes(x = Condition)) + 
+  geom_histogram(color = "black", fill = "brown", bins = 5)
+
+```
+The majority of the mounds seem to be somewhat in bad condition (2 is the most frequent score). However, almost no mounds are in the worst possible condition.
+
+### Prepare dataframe for other histograms
+```{r}
+# Extract the aster elevation values at the mounds
+mounds_values <- raster::extract(aster_crop, moundData_sp, fun = mean)
+mounds_values # elevation values at the mounds extracted from the aster raster stored in a list
+
+# Append the list of elevation values to the dataframe
+moundData$elevation <- mounds_values
+
+mounds_slopes <- raster::extract(aster_slope, moundData_sp, buf = 20, fun = mean)
+mounds_slopes # elevation values at the mounds extracted from the aster raster stored in a list
+
+# Append the list of elevation values to the dataframe
+moundData$slopes <- mounds_slopes
+
+
+
+
+# remove NA's
+moundData <- moundData %>% drop_na()
+
+moundData$Robbed <- ifelse(moundData$Robbed == 0, "Not Robbed", "Robbed")
+
+```
+
+### Histogram showing the frequency of different elevations at the mounds (robbed or not robbed)
+```{r}
+
+ggplot(moundData, aes(x = elevation)) +
+  geom_histogram(col="black", 
+                 fill="brown", 
+                 alpha = .8,
+                 bins = 20) + 
+  labs(title="Histogram showing the frequency of mounds at different elevations", x="Elevation", y="Frequency") +
+  facet_wrap(.~ Robbed)
+
+
+```
+The robbed burial mounds are more distributed across elevations than not robbed mounds. This is, however, difficult to explain and could potentially be a coincidence.
+
+### Histogram showing the frequency of slopes at different mound (robbed or nor robbed)
+```{r}
+
+ggplot(moundData, aes(x = slopes)) +
+  geom_histogram(col="black", 
+                 fill="brown", 
+                 alpha = .8,
+                 bins = 20) + 
+  labs(title="Histogram showing the frequency of different slopes at the mounds", x="Elevation", y="Frequency") +
+  facet_wrap(.~ Robbed)
+
+```
+The slope at the different mounds do not seem to have an influence on whether a mound ends up being robbed or not. Even though mounds at steeper slopes could be more difficult to access, they are not in lower risk of getting robbed.
+
+
+
+
