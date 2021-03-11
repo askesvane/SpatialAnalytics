@@ -11,7 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Task 1: Burial mound health
 
-__Question of interest__
+(Look at Jacobs repo - his way of solving the exercise was sueper elegant: https://github.com/bokajgd/CDS-Spatial-Analytics
+or file:///C:/Users/askes/Downloads/73552539962810.html)
+
+Question of interest
 We were interested in the relation between the slope and whether burial mounds have been constructed. We were also interested in the frequency of mounds at different elevations.
 
 Additionally, we wanted to examine potential different patterns between robbed and non-robbed burial mounds. Are mounds at higher elevation or with steeper slopes more or less likely to be robbed?
