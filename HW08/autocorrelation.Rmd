@@ -1,0 +1,180 @@
+---
+title: "autocorrelation"
+author: "Aske Svane Qvist"
+date: "25/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Autocorrelation
+
+## Question
+Is the population of single women in Denmark spatially correlated? What is the correlation and how significant is the trend?
+
+
+### Import packages
+```{r}
+library(raster)
+library(rgeos)
+library(sf)
+library(tidyverse)
+library(htmltools)
+library(googlesheets4)
+library(mapview)
+
+```
+
+
+### Get spatial map of Denmark with municipalities
+```{r}
+# Load the spatial data
+mun_sp <- getData('GADM', country = 'DK', level = 2)
+
+# change to sf object
+mun_sf <- st_as_sf(mun_sp)
+
+# change UTM to 32632
+mun <- st_transform(mun_sf, crs = 32632)
+mapview(mun)
+
+# Straighten the names
+sort(mun$NAME_2)
+which(grepl("Å",mun$NAME_2))
+which(grepl("Vest",mun$NAME_2))
+
+mun$NAME_2[31] <- "Aarhus"
+mun$NAME_2[21] <- "Høje-Taastrup"
+mun$NAME_2[60] <- "Vesthimmerlands"
+
+```
+
+
+### Import data of single men/women in Danish municipalities and tidy up the data
+
+Import and select relevant columns for further analysis
+```{r}
+# Import csv
+data <- read_csv("data/DKStatData_CivilStatus2015_2020.csv")
+
+# Quick overview
+head(data)
+summary(data)
+
+# Clean up the data
+data <- data %>% 
+  
+  # Change character columns to factor
+  mutate(
+    Status = as.factor(Status),
+    Sex = as.factor(Sex),
+    Region = as.factor(Region)) %>% 
+  
+  # Rename year columns to actual years
+  rename(
+    year2020 = Y2020K1) %>% 
+  
+  filter(
+    Sex == "Kvinder") %>% 
+  
+  drop_na()
+
+# Select relevant columns
+data <- data[1:4]
+
+```
+
+More data tidying
+```{r}
+# check levels in column status
+data %>% group_by(Status) %>% summarise()
+
+# Create single dummy variable (1 = single, 0 = not single)
+data$single <- ifelse(data$Status == "Gift/separeret", "0", "1")
+
+# Find the sum of ALL women in each municipality
+data_sum <- data %>% group_by(Region) %>% summarise(
+  total = sum(year2020)
+)
+
+# Merge the data with the sum data
+data <- merge(data, data_sum, by="Region")
+
+# I find the amount of single women in each municipality by calculating the difference between married (dummy 0) and total amount of women.
+# I use the number of singles and total to calculate a ratio
+data <- data %>% 
+  
+  filter(single == "0") %>% # We only need the rows with the married women including the total for each mun.
+  
+  mutate(
+    singles = total - year2020, # number of singles in the municipality
+    single_ratio = round((total - year2020) / total,2)) %>% # the ratio of single women
+  
+  subset(select = -c(Status, year2020, single)) # drop columns
+
+# Merge with geometry dataframe
+dataGeo <- mun %>% subset(select = "NAME_2") %>% merge(data, by.x = "NAME_2", by.y = "Region") %>% rename(Municipality = NAME_2)
+
+```
+
+Quick plot
+```{r}
+# Using mapview to get a quick look at the difference between municipalities
+dataGeo %>% 
+  group_by(Municipality) %>% 
+  dplyr::select(single_ratio) %>% 
+  mapview()
+
+```
+
+
+### Run autocorrelation analysis
+
+Make the data ready
+```{r}
+# Quick overview
+plot(dataGeo$geometry)
+
+# I simplify the geometry a bit
+mun_sm <- st_cast(st_simplify(dataGeo, dTolerance = 250),
+                     to = "MULTIPOLYGON")
+
+plot(mun_sm$geometry) # not really visible
+
+
+# Use the spdep package
+library(spdep)
+
+# Make neighbor list following queen adjacency
+nb <- poly2nb(mun_sm$geometry)
+nb
+
+```
+
+Plot what we define as neighbors according to queen adjacency
+(Neighbors are all given municipalities sharing borders or a corners)
+```{r}
+# Get center points of each municipality
+mun_centers <- st_coordinates(st_centroid(mun_sm$geometry))
+
+# Show the connections
+plot(mun_sm$geometry); plot(nb, mun_centers, col = "red",add = TRUE)
+```
+
+Run Moran's I autocorrelation test
+```{r}
+# Run a Moran I test on the proportion of single women
+moran.test(mun_sm$single_ratio, 
+           nb2listw(nb, style = "W",zero.policy=TRUE),
+           zero.policy=TRUE)
+
+
+# Do a Monte Carlo simulation to get a better p-value
+moran.mc(mun_sm$single_ratio,nb2listw(nb, zero.policy=TRUE),zero.policy=TRUE, nsim = 999)
+
+```
+
+Both the regular statistical test as well as the Monte Carlo simulation show a correlation of 0.28. The p-value is 0.005 thus highly significant. In sum, the ratio of single women in each municipality is geographically correlated.
+
